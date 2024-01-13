@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+  activate_validator:
+    container_name: activate-validator
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - NIMIQ_NODE_URL=http://node:8648
+      - NIMIQ_NETWORK=testnet
+      - FACUET_URL=https://faucet.pos.nimiq-testnet.com/tapit
+      - PROMETHEUS_PORT=8000
+    volumes:
+      - "/opt/nimiq/validator/secrets:/keys" # mount your validator keys here
+      - "epoch-data:/usr/src/app" # mount epoch data will be stored here
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
