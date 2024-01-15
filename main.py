@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import os
 import requests
 import json
@@ -15,12 +16,14 @@ PROMETHEUS_PORT = os.getenv('PROMETHEUS_PORT', 8000)
 ACTIVATED_AMOUNT = Gauge('nimiq_activated_amount', 'Amount activated', ['address'])
 ACTIVATE_EPOCH = Gauge('nimiq_activate_epoch', 'Epoch tried to activate validator')
 EPOCH_NUMBER = Gauge('nimiq_epoch_number', 'Epoch number')
+CURRENT_BALANCE = Gauge('nimiq_current_balance', 'Current balance')
+TOTAL_STAKE = Gauge('nimiq_validator_total_stake', 'Total amount of stake')
+CURRENT_STAKERS = Gauge('nimiq_validator_current_stakers', 'Current amount of stakers')
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s — %(message)s',
                     datefmt='%Y-%m-%d_%H:%M:%S',
                     handlers=[logging.StreamHandler()])
-
 
 def store_activation_epoch(epoch):
     with open("activation_epoch.txt", "w") as file:
@@ -117,7 +120,8 @@ def get_tx(tx_hash):
     logging.info(f"Transaction: {res}")
 
 def push_raw_tx(tx_hash):
-    res = nimiq_request("sendRawTransaction", [tx_hash])
+    res = nimiq_request("pushTransaction", [tx_hash])
+    logging.info(f"Transaction: {res}")
     if res is None:
         return None
     if 'error' in res:
@@ -130,6 +134,63 @@ def get_epoch_number():
     if res is None:
         return None
     EPOCH_NUMBER.set(res['data'])
+
+def set_balance_prometheus(address):
+    balance = get_balance(address)
+    if balance is not None:
+        balance = balance / 1e5  # Convert to NIM
+        CURRENT_BALANCE.set(balance)
+    else:
+        logging.error("Error getting balance.")
+    return balance
+
+def get_stake_by_address(address):
+    res = nimiq_request("getValidatorByAddress", [address])
+    if res is not None and 'data' in res:
+        balance = res['data'].get('balance', 0) / 1e5  # Convert to NIM
+        num_stakers = res['data'].get('numStakers', 0)
+        CURRENT_BALANCE.set(balance)
+        CURRENT_STAKERS.set(num_stakers)
+    else:
+        logging.error("Error getting stake information.")
+    return balance, num_stakers
+
+def get_balance(address):
+    res = nimiq_request("getAccountByAddress", [address])
+    if res is None:
+        return None
+    if 'error' in res:
+        logging.error(f"Error getting balance: {res['error']['message']}")
+        return None
+    return res['data']['balance']
+
+def wait_for_enough_stake(ADDRESS):
+    while True:
+        balance = get_balance(ADDRESS)
+        if balance is not None:
+            balance = balance / 1e5  # Convert to NIM
+            CURRENT_BALANCE.set(balance)
+            if balance >= 100000:  # Check if balance is at least 100k NIM
+                logging.info(f"Balance reached: {balance} NIM.")
+                break
+            else:
+                logging.info(f"Current balance: {balance} NIM. Waiting for balance to reach 100k NIM.")
+        else:
+            logging.error("Error getting balance.")
+        time.sleep(60)  # Wait for 1 minute
+
+def monitor_active_validator(address):
+    while True:
+        if is_validator_active(address):
+            logging.info("Validator still active.")
+            set_balance_prometheus(address)
+            get_epoch_number()
+            
+            
+        else:
+            logging.info("Validator not active anymore.")
+            break
+        time.sleep(60)  # Wait for 1 minute
 
 def activate_validator():
     ADDRESS = get_address()
@@ -158,11 +219,13 @@ def activate_validator():
     logging.info("Unlock Account.")
     nimiq_request("unlockAccount", [ADDRESS, '', 0])
 
+    logging.info("Wait for enough stake.")
+    wait_for_enough_stake(ADDRESS)
+
     logging.info("Activate Validator")
     result = nimiq_request("createNewValidatorTransaction", [ADDRESS, ADDRESS, SIGKEY, VOTEKEY, ADDRESS, "", 500, "+0"])
     
-    time.sleep(30) # Wait before checking the transaction
-    logging.info("Check Activate TX")
+    logging.info("Pushing transaction")
     push_raw_tx(result.get('data'))
 
     ACTIVATED_AMOUNT.labels(address=ADDRESS).inc()
@@ -176,15 +239,16 @@ def is_validator_active(address):
     logging.info(json.dumps({"active_validators": active_validators}))
     return address in active_validators
 
-def check_and_activate_validator(private_key_location, address):
+def check_and_activate_validator(address):
     current_epoch = nimiq_request("getEpochNumber")['data']
     activation_epoch = read_activation_epoch()
     if activation_epoch is None or current_epoch > activation_epoch:
         if not is_validator_active(address):
             logging.info("Activating validator.")
-            activate_validator(private_key_location)
+            activate_validator()
         else:
             logging.info("Validator already active.")
+            monitor_active_validator(address)
     else:
         next_epoch = activation_epoch + 1
         logging.info(f"Next epoch to activate validator: {next_epoch}")
