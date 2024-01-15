@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.DEBUG,
                     datefmt='%Y-%m-%d_%H:%M:%S',
                     handlers=[logging.StreamHandler()])
 
-# Store activation epoch in a file to not activate the validator multiple times in the same epoch.
+
 def store_activation_epoch(epoch):
     with open("activation_epoch.txt", "w") as file:
         file.write(str(epoch))
@@ -59,6 +59,14 @@ def nimiq_request(method, params=None, retries=3, delay=5):
     logging.error("Request failed after multiple retries.")
     return None
 
+def get_public_key(file_path):
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            if 'Private Key:' in line:
+                return line.split('Private Key:')[1].strip()
+    return None
+
 def get_private_key(file_path):
     with open(file_path, 'r') as f:
         lines = f.readlines()
@@ -67,14 +75,20 @@ def get_private_key(file_path):
                 return line.split('Private Key:')[1].strip()
     return None
 
+def get_wallet_address(file_path):
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            if 'Address:' in line:
+                return line.split('Address:')[1].strip()
+    return None
+
 def get_vote_key(file_path):
     with open(file_path, 'r') as file:
         lines = file.readlines()
-
     for i in range(len(lines)):
         if "Secret Key:" in lines[i]:
             secret_key = lines[i+2].strip()  # The secret key is two lines down
-
     return secret_key
 
 def needs_funds(address):
@@ -102,6 +116,15 @@ def get_tx(tx_hash):
         return None
     logging.info(f"Transaction: {res}")
 
+def push_raw_tx(tx_hash):
+    res = nimiq_request("sendRawTransaction", [tx_hash])
+    if res is None:
+        return None
+    if 'error' in res:
+        logging.error(f"Error pushing transaction: {res['error']['message']}")
+        return None
+    logging.info(f"Transaction: {res}")
+
 def get_epoch_number():
     res = nimiq_request("getEpochNumber")
     if res is None:
@@ -111,8 +134,10 @@ def get_epoch_number():
 def activate_validator():
     ADDRESS = get_address()
     logging.info(f"Address: {ADDRESS}")
+    
+    FEE_PUB_KEY = get_wallet_address('/keys/fee_key.txt')
 
-    SIGKEY = get_private_key('/keys/address.txt')
+    SIGKEY = get_public_key('/keys/signing_key.txt')
 
     VOTEKEY = get_vote_key('/keys/vote_key.txt')
 
@@ -134,11 +159,11 @@ def activate_validator():
     nimiq_request("unlockAccount", [ADDRESS, '', 0])
 
     logging.info("Activate Validator")
-    result = nimiq_request("sendNewValidatorTransaction", [ADDRESS, ADDRESS, SIGKEY, VOTEKEY, ADDRESS, "", 500, "+0"])
+    result = nimiq_request("createNewValidatorTransaction", [ADDRESS, ADDRESS, SIGKEY, VOTEKEY, ADDRESS, "", 500, "+0"])
     
     time.sleep(30) # Wait before checking the transaction
     logging.info("Check Activate TX")
-    get_tx(result.get('data'))
+    push_raw_tx(result.get('data'))
 
     ACTIVATED_AMOUNT.labels(address=ADDRESS).inc()
     return ADDRESS
@@ -151,13 +176,13 @@ def is_validator_active(address):
     logging.info(json.dumps({"active_validators": active_validators}))
     return address in active_validators
 
-def check_and_activate_validator(address):
+def check_and_activate_validator(private_key_location, address):
     current_epoch = nimiq_request("getEpochNumber")['data']
     activation_epoch = read_activation_epoch()
     if activation_epoch is None or current_epoch > activation_epoch:
         if not is_validator_active(address):
             logging.info("Activating validator.")
-            activate_validator()
+            activate_validator(private_key_location)
         else:
             logging.info("Validator already active.")
     else:
@@ -165,7 +190,6 @@ def check_and_activate_validator(address):
         logging.info(f"Next epoch to activate validator: {next_epoch}")
         logging.info("Waiting for next epoch to activate validator.")
 
-# Check if the consensus is establised and stay, if not, wait until it does.
 def check_block_height():
     logging.info("Waiting for consensus to be established, this may take a while...")
     consensus_count = 0
@@ -182,7 +206,7 @@ def check_block_height():
 
 if __name__ == '__main__':
     logging.info("Starting  validator activation script...")
-    logging.info(f"Version: 0.1.0 ")
+    logging.info(f"Version: 0.2.0 ")
     start_http_server(int(PROMETHEUS_PORT))  # Start Prometheus client
     # Run indefinitely
     while True:
