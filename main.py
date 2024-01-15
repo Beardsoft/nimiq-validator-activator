@@ -129,6 +129,16 @@ def push_raw_tx(tx_hash):
         return None
     logging.info(f"Transaction: {res}")
 
+def send_raw_tx(tx_hash):
+    res = nimiq_request("sendRawTransaction", [tx_hash])
+    logging.info(f"Transaction: {res}")
+    if res is None:
+        return None
+    if 'error' in res:
+        logging.error(f"Error pushing transaction: {res['error']['message']}")
+        return None
+    logging.info(f"Transaction send: {res}")
+
 def get_epoch_number():
     res = nimiq_request("getEpochNumber")
     if res is None:
@@ -227,6 +237,9 @@ def activate_validator():
     
     logging.info("Pushing transaction")
     push_raw_tx(result.get('data'))
+
+    logging.info("Sending Transaction")
+    send_raw_tx(result.get('data'))
 
     ACTIVATED_AMOUNT.labels(address=ADDRESS).inc()
     return ADDRESS
