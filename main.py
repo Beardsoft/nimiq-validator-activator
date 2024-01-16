@@ -188,8 +188,6 @@ def activate_validator(ADDRESS):
     logging.info("Unlock Account.")
     nimiq_request("unlockAccount", [ADDRESS, '', 0])
     
-    ACTIVATED_AMOUNT.labels(address=ADDRESS).set(0)
-
     logging.info("Wait for enough stake.")
     wait_for_enough_stake(ADDRESS)
 
@@ -230,7 +228,13 @@ if __name__ == '__main__':
     logging.info(f"Version: 0.3.0 ")
     start_http_server(int(PROMETHEUS_PORT))  # Start Prometheus client
     address = get_address()
+    ACTIVATED_AMOUNT.labels(address=address).set(0)
+    TOTAL_STAKE.set(0)
+    CURRENT_STAKERS.set(0)
+    CURRENT_BALANCE.set(0)
+    VALIDATOR_ACTIVE.set(0)
     while True:
         if check_consensus():
+            get_epoch_number()
             check_and_activate_validator(address)
         time.sleep(30)  # Wait for 10 minutes to check again.
