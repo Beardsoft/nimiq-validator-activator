@@ -187,6 +187,8 @@ def activate_validator(ADDRESS):
 
     logging.info("Unlock Account.")
     nimiq_request("unlockAccount", [ADDRESS, '', 0])
+    
+    ACTIVATED_AMOUNT.labels(address=ADDRESS).set(0)
 
     logging.info("Wait for enough stake.")
     wait_for_enough_stake(ADDRESS)
